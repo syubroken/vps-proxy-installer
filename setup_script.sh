@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# senyz-proxy-simple 4.0.0-alpha6-dev. Supervised VPS validation candidate.
+# senyz-proxy-simple 4.0.0-alpha7-dev. Candidate derived from alpha6; not yet VPS-verified.
 # The Bash entry embeds its Python standard-library runtime; no pip is used.
 set -euo pipefail
 set +x
@@ -84,7 +84,7 @@ import tempfile
 import time
 import zipfile
 
-VERSION = '4.0.0-alpha6-dev'
+VERSION = '4.0.0-alpha7-dev'
 SELF = Path(sys.argv[1]).resolve()
 BASE = Path('/var/lib/senyz-proxy-simple')
 ETC = Path('/etc/senyz-proxy-simple')
@@ -831,6 +831,9 @@ def prepare():
             run(['ufw', 'allow', port])
     if run(['dpkg-query', '-W', '-f=${Version}', 'cloudflare-warp']).stdout.strip() != '2026.7.1377.0':
         raise Stop('WARP 安装版本不匹配。')
+    # unattended-upgrades already skips WARP; the hold also keeps a manual
+    # `apt upgrade` from replacing the verified build.
+    run(['apt-mark', 'hold', 'cloudflare-warp'])
     proxy_uid = ensure_user(PROXY_USER, '/nonexistent', 'proxy')
     state_update(proxy_uid=proxy_uid)
     service_binary_directory()
@@ -1395,9 +1398,12 @@ def verify_served_certificate():
 
 def renew_certificate():
     require_root()
-    if not load(STATE).get('ready') or PENDING.exists():
+    s = load(STATE)
+    # needs-repair stops only the proxy; Nginx still serves the webroot.
+    if PENDING.exists() or not (s.get('ready') or s.get('stage') == 'needs-repair'):
         return
-    with lock():
+    # The health timer holds this lock for seconds each minute; wait, don't skip a day.
+    with lock(nonblocking=False, timeout=60):
         try:
             p = acme(ACME_PROD, ['--cron'], timeout=600)
             if p.returncode not in (0, 2):
@@ -1624,7 +1630,12 @@ def deadline_check():
 def health_check():
     require_root()
     s = load(STATE)
-    if not s.get('ready') or PENDING.exists():
+    if PENDING.exists():
+        return
+    if s.get('stage') == 'needs-repair' and s.get('prepared') and not s.get('ready'):
+        recover_after_health_stop(s)
+        return
+    if not s.get('ready'):
         return
     with lock():
         try:
@@ -1643,7 +1654,33 @@ def health_check():
             # Firewall blocks immediately; this reduces stale services after persistent failures.
             run(['systemctl', 'stop', PROXY_SERVICE], check=False, timeout=45)
             state_update(ready=False, stage='needs-repair')
-            say('持续健康检查失败，代理已停止；使用 status/repair。未删除或重建 WARP 注册。')
+            say('持续健康检查失败，代理已停止；WARP 出口重新通过验收后自动恢复。未删除或重建 WARP 注册。')
+
+
+def recover_after_health_stop(s):
+    # Only health_check enters needs-repair. The nft UID guard keeps failing
+    # closed meanwhile, so restart only after the same checks as the start gate
+    # pass. Registration, official exclusions and WARP itself stay untouched.
+    with lock():
+        try:
+            verify_native_split()
+            business_routes()
+            verify_warp_context()
+        except Stop:
+            state_update(health_ok=False, health_at=time.time())
+            return
+        if run(['systemctl', 'is-active', PROXY_SERVICE], check=False).returncode:
+            # Throttle so a proxy that crashes for another reason is not restarted every minute.
+            if time.time() - s.get('auto_restart_at', 0) >= 600:
+                run(['systemctl', 'reset-failed', PROXY_SERVICE], check=False)
+                # The unit's own gate may outlast this timer's budget; the next run confirms it.
+                run(['systemctl', 'start', '--no-block', PROXY_SERVICE], check=False)
+                state_update(auto_restart_at=time.time())
+            state_update(health_ok=False, health_at=time.time())
+            return
+        state_update(ready=True, stage='client-trial', health_ok=True, health_at=time.time(),
+                     health_failures=0, auto_recovered_at=time.time())
+        say('WARP 出口重新通过验收，代理已自动恢复。')
 
 
 def status():
@@ -1655,7 +1692,9 @@ def status():
               '证书检查合格': s.get('certificate_ok'),
               '证书剩余天数': int((s.get('certificate_expires_at', 0) - time.time()) / 86400) if s.get('certificate_expires_at') else None,
               '业务保护表存在': nft_is_present() if s.get('prepared') else False,
-              '真实客户端/掉线/重启验收': s.get('acceptance', {}),
+              '安装时验收字段（不自动更新，false 不代表故障）': s.get('acceptance', {}),
+              '上次自动恢复(UTC)': dt.datetime.fromtimestamp(s['auto_recovered_at'], dt.timezone.utc).isoformat(
+                  timespec='seconds') if s.get('auto_recovered_at') else None,
               '通知': '此候选尚未配置外部告警；状态与错误只在本机保存'}
     for service in ('warp-svc.service', PROXY_SERVICE, NGINX_SERVICE):
         output[service] = run(['systemctl', 'is-active', service], check=False).stdout.strip()
@@ -1691,7 +1730,8 @@ def diagnostics():
     s = load(STATE)
     report = {k: s.get(k) for k in ('version', 'stage', 'ready', 'prepared', 'created', 'health_ok',
                                   'health_at', 'health_failures', 'registration_blocked', 'recovery_errors', 'acceptance',
-                                  'certificate_ok', 'certificate_checked_at', 'certificate_expires_at')}
+                                  'certificate_ok', 'certificate_checked_at', 'certificate_expires_at',
+                                  'auto_restart_at', 'auto_recovered_at')}
     report['pending'] = PENDING.exists()
     report['recent_steps'] = recent_steps()
     report['disk_free_bytes'] = shutil.disk_usage('/').free
