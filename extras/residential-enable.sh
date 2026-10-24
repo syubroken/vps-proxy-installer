@@ -173,8 +173,11 @@ AI = [
     # YouTube stays on WARP as a whole: video traffic is heavy, and its stream URLs are bound to the page's IP.
     'domain:google.com', 'domain:google.com.hk',
     # Grok (user, 2026-10-25): its own site and app, plus xAI's site, console and API.
-    # X itself (x.com, twimg.com) stays on WARP: browsing X is heavy on images and video, and Grok inside X runs on x.com.
     'domain:grok.com', 'domain:x.ai',
+    # X as a whole (user, 2026-10-25), so Grok inside X and the X account use the same exit as grok.com:
+    # site and API, legacy twitter.com, images and video (twimg.com), short links (t.co), Spaces and live video (pscp.tv).
+    # This uses more residential traffic than the AI sites; move twimg.com back to WARP if the quota runs low.
+    'domain:x.com', 'domain:twitter.com', 'domain:twimg.com', 'domain:t.co', 'domain:pscp.tv',
     # Stripe left out: it is shared by all shops.
 ]
 rules += [

@@ -59,9 +59,9 @@ fi
 for mode in 发域名 只发IP; do
     [[ $mode == 发域名 ]] && opt=--socks5-hostname || opt=--socks5
     echo "--- 客户端$mode："
-    for site in claude.ai chatgpt.com grok.com www.cloudflare.com; do trace "$opt" "$PORT" "$site"; done
+    for site in claude.ai chatgpt.com grok.com x.com www.cloudflare.com; do trace "$opt" "$PORT" "$site"; done
 done
 if [[ -f $EM ]]; then
     echo "--- 应急入口（应该全部是 warp=on）："
-    for site in claude.ai chatgpt.com grok.com; do trace --socks5-hostname "$EPORT" "$site"; done
+    for site in claude.ai chatgpt.com grok.com x.com; do trace --socks5-hostname "$EPORT" "$site"; done
 fi
