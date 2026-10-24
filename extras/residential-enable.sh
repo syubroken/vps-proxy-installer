@@ -172,7 +172,9 @@ AI = [
     # and Gemini (all under google.com) use the residential IP. Static files (gstatic, googleapis) stay on WARP.
     # YouTube stays on WARP as a whole: video traffic is heavy, and its stream URLs are bound to the page's IP.
     'domain:google.com', 'domain:google.com.hk',
-    # Left on WARP on purpose: Grok (does not restrict by IP; add only when the user asks).
+    # Grok (user, 2026-10-25): its own site and app, plus xAI's site, console and API.
+    # X itself (x.com, twimg.com) stays on WARP: browsing X is heavy on images and video, and Grok inside X runs on x.com.
+    'domain:grok.com', 'domain:x.ai',
     # Stripe left out: it is shared by all shops.
 ]
 rules += [
