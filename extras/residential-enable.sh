@@ -167,11 +167,16 @@ AI = [
     'domain:sora.com', 'domain:chat.com', 'domain:arkoselabs.com',
     # Cloudflare Turnstile: the human check on AI login pages must see the same IP as the site
     'full:challenges.cloudflare.com',
-    # Google services except YouTube (user, 2026-10-21 evening): Google treats the shared WARP exits as mainland
-    # China plus "unusual traffic" (google.com -> google.cn / hkredirect / sorry page), so search, login, Gmail
-    # and Gemini (all under google.com) use the residential IP. Static files (gstatic, googleapis) stay on WARP.
-    # YouTube stays on WARP as a whole: video traffic is heavy, and its stream URLs are bound to the page's IP.
+    # Google services (user, 2026-10-21 evening): Google treats the shared WARP exits as mainland China plus
+    # "unusual traffic" (google.com -> google.cn / hkredirect / sorry page), so search, login, Gmail and Gemini
+    # (all under google.com) use the residential IP. Static files (gstatic, other googleapis) stay on WARP.
     'domain:google.com', 'domain:google.com.hk',
+    # YouTube as a whole (user, 2026-10-25): browsers on the WARP exit were sent to google.com/sorry, whose captcha
+    # (on google.com, residential) can never match the WARP IP. Pages, player API (web and app), bot check, video
+    # streams (stream URLs are bound to the page's IP), thumbnails and avatars all share one exit. Video is heavy.
+    'domain:youtube.com', 'domain:youtu.be', 'domain:youtube-nocookie.com', 'domain:googlevideo.com',
+    'domain:ytimg.com', 'domain:ggpht.com', 'domain:youtubei.googleapis.com', 'domain:youtube.googleapis.com',
+    'domain:jnn-pa.googleapis.com', 'full:yt3.googleusercontent.com',
     # Grok (user, 2026-10-25): its own site and app, plus xAI's site, console and API.
     'domain:grok.com', 'domain:x.ai',
     # X as a whole (user, 2026-10-25), so Grok inside X and the X account use the same exit as grok.com:
