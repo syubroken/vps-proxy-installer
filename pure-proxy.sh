@@ -8,7 +8,7 @@
 #   bash pure-proxy.sh install [--domain 域名] [--email 邮箱]   安装；中途停了，再运行一次会接着做
 #   bash pure-proxy.sh status                                   查看状态，并做一次完整自测
 #   bash pure-proxy.sh node                                     显示节点链接和二维码（只给你自己看）
-#   bash pure-proxy.sh uninstall                                卸载本方案装的服务和配置
+#   bash pure-proxy.sh uninstall                                卸载本方案装的服务和配置，并收回它在 UFW 防火墙里放行的端口
 #
 # 用到的组件：
 #   - V2Ray 5.53.0：从官方下载固定版本，核对指纹后才用。
@@ -148,8 +148,8 @@ do_install() {
     local domain='' email=''
     while (( $# )); do
         case $1 in
-            --domain) domain=${2:-}; shift ;;
-            --email) email=${2:-}; shift ;;
+            --domain) [[ -n ${2:-} ]] || die "$1 后面要写域名。"; domain=$2; shift ;;
+            --email) [[ -n ${2:-} ]] || die "$1 后面要写邮箱。"; email=$2; shift ;;
             *) die "不认识的参数 $1" ;;
         esac
         shift
@@ -269,7 +269,14 @@ EOF
     mkdir -p "$WEBROOT"
     rm -f /etc/nginx/sites-enabled/default
     if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then
-        ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
+        # Open only what is not open yet, and remember it, so uninstall can close exactly the ports this script opened.
+        local rule
+        for rule in 80/tcp 443/tcp; do
+            if ! ufw status | grep -Eq "^$rule +ALLOW"; then
+                ufw allow "$rule" >/dev/null
+                echo "$rule" >>"$ETC/ufw-opened"
+            fi
+        done
         say '服务器自带的 UFW 防火墙开着，已放行 80 和 443（SSH 原来的规则不动）。'
     fi
     cat >/etc/nginx/conf.d/pure-proxy-http.conf <<EOF
@@ -356,10 +363,17 @@ uninstall() {
           /etc/sysctl.d/90-pure-proxy.conf "$NODE_FILE"
     systemctl daemon-reload
     [[ -n $domain ]] && certbot delete --cert-name "$domain" --non-interactive >/dev/null 2>&1 || true
+    local rule closed=''
+    if [[ -f $ETC/ufw-opened ]] && command -v ufw >/dev/null; then
+        while read -r rule; do
+            if [[ $rule =~ ^[0-9]+/tcp$ ]] && ufw delete allow "$rule" >/dev/null 2>&1; then closed+=" ${rule%/tcp}"; fi
+        done <"$ETC/ufw-opened"
+    fi
     rm -rf "$APP" "$ETC" "$WEBROOT"
     id -u "$USER_NAME" >/dev/null 2>&1 && userdel "$USER_NAME" || true
     [[ -e /etc/nginx/sites-available/default ]] && ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
     nginx -t -q 2>/dev/null && systemctl reload nginx || true
+    if [[ -n $closed ]]; then say "UFW 防火墙里安装时放行的端口已收回：${closed# }。"; fi
     say '已卸载纯代理。Nginx、certbot 等系统软件包保留着，不影响别的东西。'
 }
 

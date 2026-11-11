@@ -17,6 +17,8 @@
 #   不改防火墙、Nginx 和路径，客户端只多一个节点。
 # 连接住宅代理的仍是代理程序本身，按服务器安全规则只能经 WARP 发出；WARP、nft、证书、SSH 都不改。
 # 每次都从备份的原配置重新生成，可以重复运行。撤销：bash /root/residential-disable.sh（应急入口也一起撤掉）
+# 新配置让代理起不来时，自动换回这次运行之前的配置：已经启用过的，住宅出口和密码都还在。
+# 设置文件里的 enabled 记着“住宅 IP 应该开着”。邮件提醒靠它分辨“有意撤销”和“被 resume 重置”。
 set -euo pipefail
 umask 077
 C=/etc/senyz-proxy-simple/v2ray.json
@@ -26,15 +28,17 @@ SET=/etc/senyz-proxy-simple/residential.json
 B=/opt/senyz-proxy-simple/bin/v2ray
 KEEP=0; DRY=0; EMERG=0; ARGS=()
 SERVER=''; PROTO=''; RUSER=''; EXPECT=''
+# 带值的参数后面必须跟着值；漏写时说明原因再停（以前会不出声地退出）。
+need_value() { [[ -n ${2:-} ]] || { echo "停止：$1 后面要写一个值。"; exit 2; }; }
 while (( $# )); do
     case $1 in
         --keep-password) KEEP=1 ;;
         --dry-run) DRY=1 ;;
         --with-emergency) EMERG=1 ;;
-        --server) SERVER=${2:-}; shift ;;
-        --protocol) PROTO=${2:-}; shift ;;
-        --user) RUSER=${2:-}; shift ;;
-        --expected-ip) EXPECT=${2:-}; shift ;;
+        --server) need_value "$@"; SERVER=$2; shift ;;
+        --protocol) need_value "$@"; PROTO=$2; shift ;;
+        --user) need_value "$@"; RUSER=$2; shift ;;
+        --expected-ip) need_value "$@"; EXPECT=$2; shift ;;
         *) ARGS+=("$1") ;;
     esac
     shift
@@ -82,6 +86,7 @@ if s['expected_ip']:
         ipaddress.ip_address(s['expected_ip'])
     except ValueError:
         sys.exit('停止：--expected-ip 不是有效的 IP 地址。')
+s['enabled'] = True  # the disable script sets this to false; the mail alert reads it
 print(json.dumps(s, ensure_ascii=False))
 EOF
 )
@@ -210,21 +215,33 @@ if (( DRY )); then
 fi
 chown root:sps-proxy "$TMP"
 chmod 640 "$TMP"
+# Keep the config that is running right now. If the proxy does not come up with the new one, exactly this file is
+# put back, so a failed update leaves the residential exit (and its password) as it was before this run.
+PREV=$(mktemp /etc/senyz-proxy-simple/.v2ray.prev.XXXXXX)
+trap 'rm -f "$TMP" "$PREV"' EXIT
+cp -p "$C" "$PREV"
 mv -f "$TMP" "$C"
-trap - EXIT
-# Save the provider settings (no password) for the precheck, the self-test and the mail alert.
-printf '%s\n' "$NEWSET" > "$SET.tmp" && chmod 600 "$SET.tmp" && mv -f "$SET.tmp" "$SET"
 
 echo '重启代理（几秒钟）……'
-systemctl restart sps-proxy.service
+# "|| true": a failed start must reach the roll-back below instead of ending the script here (set -e).
+systemctl restart sps-proxy.service || true
 for _ in $(seq 1 45); do systemctl is-active --quiet sps-proxy.service && break; sleep 2; done
 if systemctl is-active --quiet sps-proxy.service; then
+    # Save the provider settings (no password) only now that the new config is really in use.
+    # The precheck, the self-test and the mail alert read them.
+    printf '%s\n' "$NEWSET" > "$SET.tmp" && chmod 600 "$SET.tmp" && mv -f "$SET.tmp" "$SET"
     echo "已启用：AI 网站改走住宅 IP（$HOST:$PORT），其他网站照旧走 WARP。"
     (( EMERG )) && echo '应急入口已开：用应急节点连上来时一律走 WARP。'
     exit 0
 else
-    echo '代理没有正常启动，自动换回原配置……'
-    cp -p "$BK" "$C"
-    systemctl restart sps-proxy.service
+    echo '代理没有正常启动，自动换回这次运行之前的配置……'
+    cp -p "$PREV" "$C"
+    systemctl restart sps-proxy.service || true
+    for _ in $(seq 1 15); do systemctl is-active --quiet sps-proxy.service && break; sleep 2; done
+    if systemctl is-active --quiet sps-proxy.service; then
+        echo '已换回，代理恢复运行，一切和这次运行之前一样。请把上面的内容告诉 Claude。'
+    else
+        echo '已换回这次运行之前的配置，但代理仍没有启动。请保留现场，查看 status。'
+    fi
     exit 1
 fi

@@ -5,6 +5,7 @@
 challenges.cloudflare.com，看出口是不是住宅 IP。连续 2 次失败发邮件，仍未恢复时每 24 小时提醒一次，恢复时再发一封。
 程序会在内部读取节点参数和邮箱授权码，但不显示 UUID、代理密码或授权码。
 预期出口 IP 来自启用脚本保存的 /etc/senyz-proxy-simple/residential.json；那里没写时，第一次检测正常就自动记下。
+设置还在、代理配置里却没有住宅出口时（通常是运行过 resume），按“分流被重置”报警；用撤销脚本有意停用的不报。
 
 用法：check.py check | probe（只检测、不发信、不记状态） | test-mail | status
 """
@@ -36,16 +37,21 @@ FAILS_BEFORE_MAIL = 2
 REMIND_SECONDS = 24 * 3600
 BEIJING = timezone(timedelta(hours=8))
 
-FOOTER = ('怎么办：先在客户端里切到应急节点（全走 WARP、不经过住宅 IP 的那个）继续用，再联系 Claude 排查。\n'
-          '这封邮件由 {domain} 每 10 分钟一次的自动检测发出。')
+ADVICE = '怎么办：先在客户端里切到应急节点（全走 WARP、不经过住宅 IP 的那个）继续用，再联系 Claude 排查。'
+SIGNATURE = '这封邮件由 {domain} 每 10 分钟一次的自动检测发出。'
 PROBLEMS = {
     'res_down': ('住宅 IP 连不上',
                  '经这台服务器访问 AI 网站会打不开；其他网站不受影响（WARP 正常），应急节点也不受影响。\n'
-                 '常见原因：住宅代理服务商故障、流量用完、套餐到期、代理密码改过。'),
+                 '常见原因：住宅代理服务商故障、流量用完、套餐到期、代理密码改过。', ADVICE),
     'all_down': ('服务器整体不通',
-                 '经这台服务器，AI 网站和普通网站都测不通，可能是 WARP 或代理服务出了问题。'),
+                 '经这台服务器，AI 网站和普通网站都测不通，可能是 WARP 或代理服务出了问题。', ADVICE),
     'bypassed': ('AI 网站没有走住宅 IP',
-                 '分流没有生效：AI 网站经这台服务器看到的是 WARP 的 IP，不是住宅 IP。'),
+                 '分流没有生效：AI 网站经这台服务器看到的是 WARP 的 IP，不是住宅 IP。', ADVICE),
+    'reset': ('住宅 IP 分流被重置了',
+              'AI 网站经这台服务器走的是 WARP，不是住宅 IP：服务器上还留着住宅 IP 的设置，但代理配置里已经没有住宅出口。\n'
+              '常见原因：在服务器上运行过 resume，它会把代理配置恢复成纯 WARP。其他网站不受影响。',
+              '怎么办：主节点还能用，只是 AI 网站看到的是 WARP 的 IP；应急节点这时可能连不上。\n'
+              '联系 Claude 重新启用（要再输入一次住宅代理的密码）。如果是有意停用，在服务器上运行撤销脚本，就不会再提醒。'),
 }
 
 
@@ -75,6 +81,12 @@ def save_state(st):
 
 def residential_enabled():
     return any(o.get('tag') == 'residential' for o in load(V2RAY, {}).get('outbounds', []))
+
+
+def residential_wanted():
+    """The enable script saved its settings here and the disable script has not switched them off."""
+    s = load(RES_SETTINGS, None)
+    return bool(s) and s.get('enabled', True) is not False
 
 
 def trace(url):
@@ -185,11 +197,19 @@ def main():
         if mode == 'status':
             print(json.dumps(st, ensure_ascii=False))
             return
-        if not residential_enabled():
+        if residential_enabled():
+            expected = expected_ip(st)
+            kind, ip = classify(*probe(), expected)
+        elif residential_wanted():
+            # The settings say it should be on, but the proxy config has no residential exit. That is what
+            # `resume` leaves behind: AI sites silently use WARP. Report it instead of skipping the check.
+            expected, kind, ip = '', 'reset', None
+        else:
+            if mode == 'check' and (st['fails'] or st['alerted']):
+                st.update(fails=0, alerted=False, last_kind='off')  # switched off on purpose: nothing left to report
+                save_state(st)
             print('住宅 IP 分流没有启用，跳过检测。')
             return
-        expected = expected_ip(st)
-        kind, ip = classify(*probe(), expected)
         if mode == 'probe':
             print(f'检测结果：{kind}' + (f'（{ip}）' if ip else ''))
             return
@@ -214,8 +234,8 @@ def main():
             due = ((not st['alerted'] and st['fails'] >= FAILS_BEFORE_MAIL)
                    or (st['alerted'] and t - st['last_mail'] >= REMIND_SECONDS))
             if due:
-                title, text = PROBLEMS[kind]
-                footer = FOOTER.format(domain=domain())
+                title, text, advice = PROBLEMS[kind]
+                footer = advice + '\n' + SIGNATURE.format(domain=domain())
                 if send(f'【{domain()}】{title}',
                         f'{text}\n\n时间：{now_beijing()}（北京时间），已连续 {st["fails"]} 次检测失败。\n\n{footer}'):
                     st.update(alerted=True, last_mail=t)

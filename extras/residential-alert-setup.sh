@@ -19,7 +19,10 @@ HOST="${1:-}"
 [[ $EUID == 0 ]] || { echo '停止：需要 root。'; exit 2; }
 [[ -x /opt/senyz-proxy-simple/bin/v2ray ]] || { echo '停止：没有找到本方案的代理。'; exit 2; }
 [[ -f $SRC ]] || { echo "停止：没有找到 $SRC，请先上传检测程序。"; exit 2; }
-python3 -m py_compile "$SRC" || { echo '停止：检测程序有错误，未改动。'; exit 2; }
+# 只检查语法，不在 /root 留下 __pycache__ 文件夹（以前的写法会留），顺手清掉旧版本留下的那一个。
+python3 -c 'import ast, sys; ast.parse(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1])' "$SRC" || { echo '停止：检测程序有错误，未改动。'; exit 2; }
+rm -f /root/__pycache__/residential-alert-check.cpython-*.pyc
+rmdir /root/__pycache__ 2>/dev/null || true
 if (( UPDATE )); then
     [[ -f $CONF ]] || { echo '停止：还没有安装过（没有邮件设置），请不带 --update 运行。'; exit 2; }
 else

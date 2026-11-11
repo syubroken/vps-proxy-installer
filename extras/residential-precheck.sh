@@ -14,11 +14,13 @@ SET=/etc/senyz-proxy-simple/residential.json
 B=/opt/senyz-proxy-simple/bin/v2ray
 U=sps-proxy
 SERVER=''; PROTO=''
+# 带值的参数后面必须跟着值；漏写时说明原因再停（以前会不出声地退出）。
+need_value() { [[ -n ${2:-} ]] || { echo "停止：$1 后面要写一个值。"; exit 2; }; }
 while (( $# )); do
     case $1 in
-        --server) SERVER=${2:-}; shift ;;
-        --protocol) PROTO=${2:-}; shift ;;
-        --user|--expected-ip) shift ;;
+        --server) need_value "$@"; SERVER=$2; shift ;;
+        --protocol) need_value "$@"; PROTO=$2; shift ;;
+        --user|--expected-ip) need_value "$@"; shift ;;
     esac
     shift
 done
