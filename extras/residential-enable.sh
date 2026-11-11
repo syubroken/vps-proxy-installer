@@ -176,6 +176,12 @@ AI = [
     # "unusual traffic" (google.com -> google.cn / hkredirect / sorry page), so search, login, Gmail and Gemini
     # (all under google.com) use the residential IP. Static files (gstatic, other googleapis) stay on WARP.
     'domain:google.com', 'domain:google.com.hk',
+    # Gemini API and Google's coding tools (user, 2026-11-12): these endpoints judge the location by the exit IP and
+    # often reject datacenter-type exits (the WARP exit is one) with "User location is not supported". Only these
+    # three hosts are added; the rest of googleapis.com stays on WARP. generativelanguage is the Gemini API (AI Studio
+    # keys, image models, file upload); cloudcode-pa and daily-cloudcode-pa serve Antigravity and Gemini CLI.
+    'full:generativelanguage.googleapis.com', 'full:cloudcode-pa.googleapis.com',
+    'full:daily-cloudcode-pa.googleapis.com',
     # YouTube as a whole (user, 2026-10-25): browsers on the WARP exit were sent to google.com/sorry, whose captcha
     # (on google.com, residential) can never match the WARP IP. Pages, player API (web and app), bot check, video
     # streams (stream URLs are bound to the page's IP), thumbnails and avatars all share one exit. Video is heavy.
